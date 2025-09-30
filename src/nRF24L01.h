@@ -4,37 +4,22 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define USE_RX_MULTI
 
 typedef enum
 {
-    RX_P0 = 0x1,
-#ifdef USE_RX_MULTI
-    RX_P1 = 0x2,
-    RX_P2 = 0x4,
-    RX_P3 = 0x8,
-    RX_P4 = 0x16,
-    RX_P5 = 0x32
-#endif
+    RX_P0 = 0,
+    RX_P1,
+    RX_P2,
+    RX_P3,
+    RX_P4,
+    RX_P5
 } RxPipe_e;
-
-typedef enum
-{
-    RX_DPL_P0 = 0x1,
-#ifdef USE_RX_MULTI
-    RX_DPL_P1 = 0x2,
-    RX_DPL_P2 = 0x4,
-    RX_DPL_P3 = 0x8,
-    RX_DPL_P4 = 0x16,
-    RX_DPL_P5 = 0x32
-#endif
-} RxDynPayl_e;
 
 typedef enum
 {
     AW_3 = 0x1,
     AW_4 = 0x2,
-    AW_5 = 0x4
+    AW_5 = 0x3
 } AddressWidth_e;
 
 typedef enum
@@ -46,39 +31,36 @@ typedef enum
 
 typedef enum
 {
-    TX_PWR_NEG_18dBm,
-    TX_PWR_NEG_12dBm,
-    TX_PWR_NEG_6dBm,
-    TX_PWR_0dBm
+    TX_PWR_NEG_18dBm = 0x0,
+    TX_PWR_NEG_12dBm = 0x1,
+    TX_PWR_NEG_6dBm = 0x2,
+    TX_PWR_0dBm = 0x3
 } TxPower_e;
+
+typedef enum
+{
+    ARD_250US = 0x0,
+    ARD_500US = 0x1,
+    ARD_1000US = 0x3,
+    ARD_2000US = 0x7,
+    ARD_4000US = 0xF
+} ARD_e;
 
 typedef struct
 {
-    uint8_t rx_active_pipes;        // Values of RxPipe_e
-    uint32_t rx_p0_addr;
-#ifdef USE_RX_MULTI
-    uint32_t rx_p1_addr;
-    uint8_t rx_p2_addr;             // Only LSB. MSBytes are equal to rx_p1_addr
-    uint8_t rx_p3_addr;             // Only LSB. MSBytes are equal to rx_p1_addr
-    uint8_t rx_p4_addr;             // Only LSB. MSBytes are equal to rx_p1_addr
-    uint8_t rx_p5_addr;             // Only LSB. MSBytes are equal to rx_p1_addr
-#endif
-    uint8_t rx_pl_p0_size;          // rx payload size for rx_pipe, 0 to 32 bytes, 0 - rx disabled
-#ifdef USE_RX_MULTI
-    uint8_t rx_pl_p1_size;          // rx payload size for rx_pipe, 0 to 32 bytes, 0 - rx disabled
-    uint8_t rx_pl_p2_size;          // rx payload size for rx_pipe, 0 to 32 bytes, 0 - rx disabled
-    uint8_t rx_pl_p3_size;          // rx payload size for rx_pipe, 0 to 32 bytes, 0 - rx disabled
-    uint8_t rx_pl_p4_size;          // rx payload size for rx_pipe, 0 to 32 bytes, 0 - rx disabled
-    uint8_t rx_pl_p5_size;          // rx payload size for rx_pipe, 0 to 32 bytes, 0 - rx disabled
-#endif
-    uint8_t rx_dpl;                 // enable or disable dynamic payload length for pipes, RxDynPayl_e
+    RxPipe_e rx_pipe;
+    uint32_t rx_addr;               // 0 & 1 pipe 32-bit, the rest are LSByte + 3 bytes of 1st pipe
+    uint8_t* buff;
+    uint8_t size;                   // 1 - 32 bytes
+    uint32_t ms;
+    bool rx_dpl;                    // enable or disable dynamic payload length
 } RxConfig_t;
 
 typedef struct
-{
-    TxPower_e tx_pwr;
-    uint8_t arc;                    // auto-retransmit count, 0 disabled, 15 max
-    uint16_t ard;                   // auto-retransmit delay, 250-4000 us, multiple of 250 
+{    
+    uint32_t tx_addr;
+    uint8_t* data;
+    uint8_t size;
 } TxConfig_t;
 
 typedef struct
@@ -86,10 +68,11 @@ typedef struct
     /* bool enable_rx_dr_irq;
     bool enable_tx_ds_irq;
     bool enable_max_rt_irq; */
+    TxPower_e tx_pwr;
+    uint8_t arc;                    // auto-retransmit count, 0 disabled, 15 max
+    ARD_e ard;                      // auto-retransmit delay
     uint8_t rf_freq;                // freq of module. Value is 1 to 124 MHz
     DataRate_e data_rate;
-    RxConfig_t rx_config;
-    TxConfig_t tx_config;
 } nRF24L01_Init_t;
 
 typedef enum
@@ -100,7 +83,7 @@ typedef enum
 } RF_Return_e;
 
 RF_Return_e nRF24L01_init(const nRF24L01_Init_t* config);
-RF_Return_e nRF24L01_tx(const uint32_t tx_addr, const uint8_t* data, const uint8_t size);
-RF_Return_e nRF24L01_rx(const RxPipe_e pipe, uint8_t* buff, const uint8_t size, uint32_t ms);
+RF_Return_e nRF24L01_tx(const TxConfig_t* tx);
+RF_Return_e nRF24L01_rx(const RxConfig_t* rx);
 
 #endif // NRF24L01_H

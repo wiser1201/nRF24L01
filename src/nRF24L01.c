@@ -94,6 +94,11 @@
 
 #define RF_FREQ_MIN 1
 #define RF_FREQ_MAX 124
+#define RF_FREQ_DEFAULT 2
+
+#define ARD_STEP 250
+#define ARD_MIN ARD_STEP
+#define ARD_MAX (ARD_STEP * 16)
 
 #define ALL_PIPES_MASK 0b111111
 
@@ -133,6 +138,7 @@ typedef enum
 } ChipMode_e;
 
 static volatile ChipMode_e chip_mode;
+
 /**
  * @brief  Reports the name of the source file and the source line number
  *         where the assert_param error has occurred.
@@ -143,6 +149,7 @@ static volatile ChipMode_e chip_mode;
 extern void spi_tx(const uint8_t* data, const unsigned int size, const bool cs);
 extern void spi_rx(uint8_t* buff, const unsigned int size, const bool cs);
 extern void ex_delay_us(const uint32_t us);
+extern uint32_t ex_get_ms(void);
 extern void gpio_set_ce(const bool level);
 void rf_irq(void);
 
@@ -170,35 +177,18 @@ static uint32_t parse_buff(const uint8_t* buff, const uint8_t size);
 
 RF_Return_e nRF24L01_init(const nRF24L01_Init_t *config)
 {
-    gpio_set_ce(LOW);
-
-    uint8_t config_reg = 0;
-    /* if (config->enable_rx_dr_irq == false)
-    {
-        config_reg |= (1 << MASK_RX_DR);
-    }
-    if (config->enable_tx_ds_irq == false)
-    {
-        config_reg |= (1 << MASK_TX_DS);
-    }
-    if (config->enable_max_rt_irq == false)
-    {
-        config_reg |= (1 << MASK_MAX_RT);
-    } */
-    config_reg |= (1 << EN_CRC);
-
-    uint8_t rx_pipe_reg = 0;
-    if (config->rx_config.rx_active_pipes > 0 && config->rx_config.rx_active_pipes <= ALL_PIPES_MASK)
-    {
-        rx_pipe_reg = config->rx_config.rx_active_pipes;
-    }
-
     uint8_t addr_width_reg = 0;
-    addr_width_reg |= (1 << AW_MSB); // aw is 4 bytes
+    FLAG_SET(addr_width_reg, AW_MSB); // aw is 4 bytes
 
     uint8_t retr_reg = 0;
-    retr_reg |= (0b0011 << ARD_LSB); // retry every 1 ms
-    retr_reg |= (0b0011 << ARC_LSB); // retry 3 times
+    if ((uint8_t)config->ard <= 0xF)
+    {
+        retr_reg |= ((uint8_t)config->ard << ARD_LSB);
+    }
+    if (config->arc <= 0xF)
+    {
+        retr_reg |= (config->arc << ARC_LSB); // retry 3 times
+    }
 
     uint8_t rf_freq_reg = 0;
     if (config->rf_freq >= RF_FREQ_MIN && config->rf_freq <= RF_FREQ_MAX)
@@ -207,89 +197,31 @@ RF_Return_e nRF24L01_init(const nRF24L01_Init_t *config)
     }
     else
     {
-        rf_freq_reg = 2;
+        rf_freq_reg = RF_FREQ_DEFAULT;
     }
 
     uint8_t rf_config_reg = 0;
     switch (config->data_rate)
     {
     case DR_250KBPS:
-        rf_config_reg |= (1 << RF_DR_LOW);
+        FLAG_SET(rf_config_reg, RF_DR_LOW);
         break;
     case DR_2MBPS:
-        rf_config_reg |= (1 << RF_DR_HIGH);
+        FLAG_SET(rf_config_reg, RF_DR_HIGH);
         break;
     default:
     case DR_1MBPS:
         break;
     }
-    switch (config->tx_config.tx_pwr)
+    if ((uint8_t)config->tx_pwr <= 0x3)
     {
-    case TX_PWR_NEG_18dBm:
-        break;
-    case TX_PWR_NEG_12dBm:
-        rf_config_reg |= (1 << RF_PWR_LSB);
-        break;
-    case TX_PWR_NEG_6dBm:
-        rf_config_reg |= (1 << RF_PWR_MSB);
-        break;
-    default:
-    case TX_PWR_0dBm:
-        rf_config_reg |= (1 << RF_PWR_LSB);
-        rf_config_reg |= (1 << RF_PWR_MSB);
-        break;
+        rf_config_reg |= ((uint8_t)config->tx_pwr << RF_PWR_LSB);
     }
 
-    uint32_t rx_addr_p0_reg = config->rx_config.rx_p0_addr;
-#ifdef USE_RX_MULTI
-    uint32_t rx_addr_p1_reg = config->rx_config.rx_p1_addr;
-    uint8_t rx_addr_p2_reg = config->rx_config.rx_p2_addr;
-    uint8_t rx_addr_p3_reg = config->rx_config.rx_p3_addr;
-    uint8_t rx_addr_p4_reg = config->rx_config.rx_p4_addr;
-    uint8_t rx_addr_p5_reg = config->rx_config.rx_p5_addr;
-#endif
-
-    uint8_t rx_pl_p0_size_reg = config->rx_config.rx_pl_p0_size;
-#ifdef USE_RX_MULTI
-    uint8_t rx_pl_p1_size_reg = config->rx_config.rx_pl_p1_size;
-    uint8_t rx_pl_p2_size_reg = config->rx_config.rx_pl_p2_size;
-    uint8_t rx_pl_p3_size_reg = config->rx_config.rx_pl_p3_size;
-    uint8_t rx_pl_p4_size_reg = config->rx_config.rx_pl_p4_size;
-    uint8_t rx_pl_p5_size_reg = config->rx_config.rx_pl_p5_size;
-#endif
-
-    uint8_t feat_reg = 0;
-    uint8_t rx_dpl_reg = 0;
-    if (config->rx_config.rx_dpl > 0 && config->rx_config.rx_dpl < ALL_PIPES_MASK)
-    {
-        rx_dpl_reg = config->rx_config.rx_dpl;
-        feat_reg |= (1 << EN_DPL);
-    }
-
-    write_reg(REG_CONFIG, config_reg, sizeof(config_reg));
-    write_reg(REG_EN_RXADDR, rx_pipe_reg, sizeof(rx_pipe_reg));
     write_reg(REG_SETUP_AW, addr_width_reg, sizeof(addr_width_reg));
     write_reg(REG_SETUP_RETR, retr_reg, sizeof(retr_reg));
     write_reg(REG_RF_CH, rf_freq_reg, sizeof(rf_freq_reg));
-    write_reg(REG_RF_SETUP, rf_config_reg, sizeof(rf_config_reg));
-    write_reg(REG_RX_ADDR_P0, rx_addr_p0_reg, sizeof(rx_addr_p0_reg));
-#ifdef USE_RX_MULTI
-    write_reg(REG_RX_ADDR_P1, rx_addr_p1_reg, sizeof(rx_addr_p1_reg));
-    write_reg(REG_RX_ADDR_P2, rx_addr_p2_reg, sizeof(rx_addr_p2_reg));
-    write_reg(REG_RX_ADDR_P3, rx_addr_p3_reg, sizeof(rx_addr_p3_reg));
-    write_reg(REG_RX_ADDR_P4, rx_addr_p4_reg, sizeof(rx_addr_p4_reg));
-    write_reg(REG_RX_ADDR_P5, rx_addr_p5_reg, sizeof(rx_addr_p5_reg));
-#endif
-    write_reg(REG_RX_PW_P0, rx_pl_p0_size_reg, sizeof(rx_pl_p0_size_reg));
-#ifdef USE_RX_MULTI
-    write_reg(REG_RX_PW_P1, rx_pl_p1_size_reg, sizeof(rx_pl_p1_size_reg));
-    write_reg(REG_RX_PW_P2, rx_pl_p2_size_reg, sizeof(rx_pl_p2_size_reg));
-    write_reg(REG_RX_PW_P3, rx_pl_p3_size_reg, sizeof(rx_pl_p3_size_reg));
-    write_reg(REG_RX_PW_P4, rx_pl_p4_size_reg, sizeof(rx_pl_p4_size_reg));
-    write_reg(REG_RX_PW_P5, rx_pl_p5_size_reg, sizeof(rx_pl_p5_size_reg));
-#endif
-    write_reg(REG_FEATURE, feat_reg, sizeof(feat_reg));
-    write_reg(REG_DYNPD, rx_dpl_reg, sizeof(rx_dpl_reg));
+    write_reg(REG_RF_SETUP, rf_config_reg, sizeof(rf_config_reg));    
 
     switch_chip_mode(MODE_POWER_DOWN);
     return RF_RET_OK;
@@ -317,7 +249,8 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
         {
         case MODE_STANDBY_I:
         {
-            standby();
+            gpio_set_ce(LOW);
+            to_standby();
             chip_mode = mode;
             break;
         }
@@ -330,7 +263,7 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
         {
         case MODE_POWER_DOWN:
         {
-            powerdown();
+            to_powerdown();
             chip_mode = mode;
             break;
         }
@@ -420,36 +353,32 @@ void to_powerdown(void)
 void to_active(void)
 {
     gpio_set_ce(HIGH);
-    ex_delay_us(20);
-    gpio_set_ce(LOW);
 }
 
-RF_Return_e nRF24L01_tx(const uint32_t tx_addr, const uint8_t* data, const uint8_t size)
+RF_Return_e nRF24L01_tx(const TxConfig_t* tx)
 {
     if (switch_chip_mode(MODE_STANDBY_I) != RF_RET_OK)
     {
         return RF_RET_NO_INIT;
     }
-    
-    gpio_set_ce(LOW);
 
     uint8_t config_reg = read_reg(REG_CONFIG, sizeof(uint8_t));
     if (FLAG_IS_SET(config_reg, PRIM_RX))
     {
         FLAG_CLEAR(config_reg, PRIM_RX);
         write_reg(REG_CONFIG, config_reg, sizeof(config_reg));
-    }   
+    }
 
     uint8_t rx_pipe_reg = read_reg(REG_EN_RXADDR, sizeof(uint8_t));
     if (FLAG_IS_SET(rx_pipe_reg, ERX_P0) == false)
     {
         FLAG_SET(rx_pipe_reg, ERX_P0);
         write_reg(REG_EN_RXADDR, rx_pipe_reg, sizeof(rx_pipe_reg));
-    }    
+    }
 
-    write_reg(REG_TX_ADDR, tx_addr, sizeof(tx_addr));
-    write_reg(REG_RX_ADDR_P0, tx_addr, sizeof(tx_addr));
-    tx_pl(data, size);
+    write_reg(REG_TX_ADDR, tx->tx_addr, sizeof(tx->tx_addr));
+    write_reg(REG_RX_ADDR_P0, tx->tx_addr, sizeof(tx->tx_addr));
+    tx_pl(tx->data, tx->size);
 
     switch_chip_mode(MODE_RX_TX);
     
@@ -461,6 +390,85 @@ RF_Return_e nRF24L01_tx(const uint32_t tx_addr, const uint8_t* data, const uint8
     switch_chip_mode(MODE_STANDBY_I);
 
     if (!success) return RF_RET_FAIL;
+    return RF_RET_OK;
+}
+
+RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
+{
+    if (switch_chip_mode(MODE_STANDBY_I) != RF_RET_OK)
+    {
+        return RF_RET_NO_INIT;
+    }
+
+    uint8_t config_reg = read_reg(REG_CONFIG, sizeof(uint8_t));
+    if (FLAG_IS_SET(config_reg, PRIM_RX) == false)
+    {
+        FLAG_SET(config_reg, PRIM_RX);
+        write_reg(REG_CONFIG, config_reg, sizeof(config_reg));
+    }
+
+    uint8_t reg_shift = (uint8_t)rx->rx_pipe;
+    if (reg_shift > (uint8_t)RX_P5)
+    {
+        return RF_RET_NO_INIT;
+    }
+    
+    uint8_t rx_pipe_reg = 0;
+    FLAG_SET(rx_pipe_reg, ERX_P0 + reg_shift);
+
+    uint8_t rx_pipe_reg_old = read_reg(REG_EN_RXADDR, sizeof(rx_pipe_reg));
+    if ((rx_pipe_reg_old & rx_pipe_reg) == 0)
+    {
+        rx_pipe_reg |= rx_pipe_reg_old;
+        write_reg(REG_EN_RXADDR, rx_pipe_reg, sizeof(rx_pipe_reg));
+    }
+
+    write_reg(REG_RX_ADDR_P0 + reg_shift, rx->rx_addr, sizeof(rx->rx_addr));    
+
+    if (rx->rx_dpl)
+    {
+        uint8_t rx_dpl_reg = 0, feat_reg = 0;
+        FLAG_SET(rx_dpl_reg, DPL_P0 + reg_shift);
+        feat_reg = (1 << EN_DPL);
+        write_reg(REG_FEATURE, feat_reg, sizeof(feat_reg));
+        write_reg(REG_DYNPD, rx_dpl_reg, sizeof(rx_dpl_reg));
+    }
+    else
+    {
+        write_reg(REG_RX_PW_P0 + reg_shift, rx->size, sizeof(rx->size));
+    }
+
+    switch_chip_mode(MODE_RX_TX);
+    
+    const uint32_t time_ms = ex_get_ms();
+    while (chip_mode == MODE_RX_TX)
+    {
+        if ((ex_get_ms() - time_ms) > rx->ms)
+        {
+            switch_chip_mode(MODE_STANDBY_I);
+            RF_RET_FAIL;
+        }
+    }
+
+    rf_irq_handler();
+    
+    const bool success = chip_mode == MODE_RX_DR;
+    switch_chip_mode(MODE_STANDBY_I);
+
+    if (!success)
+    {
+        return RF_RET_FAIL;
+    }
+
+    uint8_t status_reg = nop();
+    uint8_t data_in_pipe = (status_reg & 0b00001110);    
+
+    if (data_in_pipe != (uint8_t)rx->rx_pipe)
+    {
+        return RF_RET_FAIL;
+    }
+
+    rx_pl(rx->buff, rx->size);
     return RF_RET_OK;
 }
 
