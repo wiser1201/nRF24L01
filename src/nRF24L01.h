@@ -76,7 +76,6 @@ typedef struct
 
 typedef struct
 {
-    uint32_t tx_addr;
     TxPower_e tx_pwr;
     uint8_t arc;                    // auto-retransmit count, 0 disabled, 15 max
     uint16_t ard;                   // auto-retransmit delay, 250-4000 us, multiple of 250 
@@ -84,16 +83,24 @@ typedef struct
 
 typedef struct
 {
-    bool enable_rx_dr_irq;
+    /* bool enable_rx_dr_irq;
     bool enable_tx_ds_irq;
-    bool enable_max_rt_irq;
+    bool enable_max_rt_irq; */
     uint8_t rf_freq;                // freq of module. Value is 1 to 124 MHz
     DataRate_e data_rate;
     RxConfig_t rx_config;
     TxConfig_t tx_config;
 } nRF24L01_Init_t;
 
-void nRF24L01_init(const nRF24L01_Init_t* config);
+typedef enum
+{
+    RF_RET_OK,
+    RF_RET_NO_INIT,
+    RF_RET_FAIL
+} RF_Return_e;
 
+RF_Return_e nRF24L01_init(const nRF24L01_Init_t* config);
+RF_Return_e nRF24L01_tx(const uint32_t tx_addr, const uint8_t* data, const uint8_t size);
+RF_Return_e nRF24L01_rx(const RxPipe_e pipe, uint8_t* buff, const uint8_t size, uint32_t ms);
 
 #endif // NRF24L01_H

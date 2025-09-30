@@ -99,6 +99,11 @@
 
 #define US_IN_MS 1000UL
 
+#define FLAG_IS_SET(reg, flag) ((reg) & (1 << (flag)))
+#define FLAG_SET(reg, flag)    ((reg) |= (1 << (flag)))
+#define FLAG_CLEAR(reg, flag)  ((reg) &= ~(1 << (flag)))
+#define FLAG_TOGGLE(reg, flag) ((reg) ^= (1 << (flag)))
+
 typedef enum
 {
     OP_READ_REG = 0b0000000,
@@ -115,6 +120,19 @@ typedef enum
 
 } Operation_e;
 
+typedef enum
+{
+    MODE_UNDEFINED,
+    MODE_POWER_DOWN,
+    MODE_STANDBY_I,
+    MODE_STANDBY_II,
+    MODE_RX_TX,
+    MODE_RX_DR,
+    MODE_TX_DS,
+    MODE_IRQ
+} ChipMode_e;
+
+static volatile ChipMode_e chip_mode;
 /**
  * @brief  Reports the name of the source file and the source line number
  *         where the assert_param error has occurred.
@@ -126,6 +144,7 @@ extern void spi_tx(const uint8_t* data, const unsigned int size, const bool cs);
 extern void spi_rx(uint8_t* buff, const unsigned int size, const bool cs);
 extern void ex_delay_us(const uint32_t us);
 extern void gpio_set_ce(const bool level);
+void rf_irq(void);
 
 static uint32_t read_reg(const uint8_t reg_addr, const uint8_t reg_size);
 static void write_reg(const uint8_t reg_addr, const uint32_t reg_data, const uint8_t reg_size);
@@ -141,24 +160,20 @@ static uint8_t nop();
 
 static void tx_op(const Operation_e op, const uint8_t reg_addr);
 
-static void wake_up(void);
+static RF_Return_e switch_chip_mode(const ChipMode_e mode);
+static void to_standby(void);
+static void to_powerdown(void);
+static void to_active(void);
+static void rf_irq_handler(void);
+static uint32_t parse_buff(const uint8_t* buff, const uint8_t size);
 
-static uint32_t parse_buff(const uint8_t* buff, const uint8_t size)
-{
-    uint32_t ret = 0;
-    for (int byte_n = 0; byte_n < size; ++byte_n)
-    {
-        ret |= ((uint32_t)buff[0] << (byte_n * 8));
-    }
-    return ret;
-}
 
-void nRF24L01_init(const nRF24L01_Init_t *config)
+RF_Return_e nRF24L01_init(const nRF24L01_Init_t *config)
 {
     gpio_set_ce(LOW);
 
     uint8_t config_reg = 0;
-    if (config->enable_rx_dr_irq == false)
+    /* if (config->enable_rx_dr_irq == false)
     {
         config_reg |= (1 << MASK_RX_DR);
     }
@@ -169,7 +184,7 @@ void nRF24L01_init(const nRF24L01_Init_t *config)
     if (config->enable_max_rt_irq == false)
     {
         config_reg |= (1 << MASK_MAX_RT);
-    }
+    } */
     config_reg |= (1 << EN_CRC);
 
     uint8_t rx_pipe_reg = 0;
@@ -225,8 +240,6 @@ void nRF24L01_init(const nRF24L01_Init_t *config)
         break;
     }
 
-    uint32_t tx_addr_reg = config->tx_config.tx_addr;
-
     uint32_t rx_addr_p0_reg = config->rx_config.rx_p0_addr;
 #ifdef USE_RX_MULTI
     uint32_t rx_addr_p1_reg = config->rx_config.rx_p1_addr;
@@ -252,13 +265,229 @@ void nRF24L01_init(const nRF24L01_Init_t *config)
         rx_dpl_reg = config->rx_config.rx_dpl;
         feat_reg |= (1 << EN_DPL);
     }
+
+    write_reg(REG_CONFIG, config_reg, sizeof(config_reg));
+    write_reg(REG_EN_RXADDR, rx_pipe_reg, sizeof(rx_pipe_reg));
+    write_reg(REG_SETUP_AW, addr_width_reg, sizeof(addr_width_reg));
+    write_reg(REG_SETUP_RETR, retr_reg, sizeof(retr_reg));
+    write_reg(REG_RF_CH, rf_freq_reg, sizeof(rf_freq_reg));
+    write_reg(REG_RF_SETUP, rf_config_reg, sizeof(rf_config_reg));
+    write_reg(REG_RX_ADDR_P0, rx_addr_p0_reg, sizeof(rx_addr_p0_reg));
+#ifdef USE_RX_MULTI
+    write_reg(REG_RX_ADDR_P1, rx_addr_p1_reg, sizeof(rx_addr_p1_reg));
+    write_reg(REG_RX_ADDR_P2, rx_addr_p2_reg, sizeof(rx_addr_p2_reg));
+    write_reg(REG_RX_ADDR_P3, rx_addr_p3_reg, sizeof(rx_addr_p3_reg));
+    write_reg(REG_RX_ADDR_P4, rx_addr_p4_reg, sizeof(rx_addr_p4_reg));
+    write_reg(REG_RX_ADDR_P5, rx_addr_p5_reg, sizeof(rx_addr_p5_reg));
+#endif
+    write_reg(REG_RX_PW_P0, rx_pl_p0_size_reg, sizeof(rx_pl_p0_size_reg));
+#ifdef USE_RX_MULTI
+    write_reg(REG_RX_PW_P1, rx_pl_p1_size_reg, sizeof(rx_pl_p1_size_reg));
+    write_reg(REG_RX_PW_P2, rx_pl_p2_size_reg, sizeof(rx_pl_p2_size_reg));
+    write_reg(REG_RX_PW_P3, rx_pl_p3_size_reg, sizeof(rx_pl_p3_size_reg));
+    write_reg(REG_RX_PW_P4, rx_pl_p4_size_reg, sizeof(rx_pl_p4_size_reg));
+    write_reg(REG_RX_PW_P5, rx_pl_p5_size_reg, sizeof(rx_pl_p5_size_reg));
+#endif
+    write_reg(REG_FEATURE, feat_reg, sizeof(feat_reg));
+    write_reg(REG_DYNPD, rx_dpl_reg, sizeof(rx_dpl_reg));
+
+    switch_chip_mode(MODE_POWER_DOWN);
+    return RF_RET_OK;
 }
 
-void wake_up(void)
+RF_Return_e switch_chip_mode(const ChipMode_e mode)
+{
+    switch (chip_mode)
+    {
+    case MODE_UNDEFINED:
+    {
+        switch (mode)
+        {
+        case MODE_POWER_DOWN:
+        {
+            chip_mode = mode;
+            break;
+        }
+        }
+        break;
+    }
+    case MODE_POWER_DOWN:
+    {
+        switch (mode)
+        {
+        case MODE_STANDBY_I:
+        {
+            standby();
+            chip_mode = mode;
+            break;
+        }
+        }
+        break;
+    }
+    case MODE_STANDBY_I:
+    {
+        switch (mode)
+        {
+        case MODE_POWER_DOWN:
+        {
+            powerdown();
+            chip_mode = mode;
+            break;
+        }
+        case MODE_RX_TX:
+        {
+            to_active();
+            chip_mode = mode;
+            break;
+        }
+        }
+        break;
+    }
+    case MODE_RX_TX:
+    {
+        switch (mode)
+        {
+        case MODE_STANDBY_I:
+        {
+            gpio_set_ce(LOW);
+            chip_mode = mode;
+            break;
+        }
+        case MODE_IRQ:
+        {
+            chip_mode = mode;
+            break;
+        }
+        }
+        break;
+    }
+    case MODE_IRQ:
+    {
+        switch (mode)
+        {
+        case MODE_STANDBY_I:
+        {
+            gpio_set_ce(LOW);
+            chip_mode = mode;
+            break;
+        }
+        case MODE_TX_DS:
+        case MODE_RX_DR:
+        {
+            chip_mode = mode;
+            break;
+        }
+        }
+        break;
+    }
+    case MODE_TX_DS:
+    case MODE_RX_DR:
+    {
+        switch (mode)
+        {
+        case MODE_STANDBY_I:
+        {
+            gpio_set_ce(LOW);
+            chip_mode = mode;
+            break;
+        }
+        }
+        break;
+    }
+    }
+    if (chip_mode != mode)
+    {
+        return RF_RET_FAIL;
+    }
+    return RF_RET_OK;
+}
+
+void to_standby(void)
+{
+    uint8_t config_reg = read_reg(REG_CONFIG, sizeof(uint8_t));
+    FLAG_SET(config_reg, PWR_UP);
+    write_reg(REG_CONFIG, config_reg, sizeof(config_reg));
+    ex_delay_us(US_IN_MS * 10);
+}
+
+void to_powerdown(void)
+{
+    uint8_t config_reg = read_reg(REG_CONFIG, sizeof(uint8_t));
+    FLAG_CLEAR(config_reg, PWR_UP);
+    write_reg(REG_CONFIG, config_reg, sizeof(config_reg));
+}
+
+void to_active(void)
 {
     gpio_set_ce(HIGH);
-    ex_delay_us(US_IN_MS * 10);
+    ex_delay_us(20);
+    gpio_set_ce(LOW);
+}
 
+RF_Return_e nRF24L01_tx(const uint32_t tx_addr, const uint8_t* data, const uint8_t size)
+{
+    if (switch_chip_mode(MODE_STANDBY_I) != RF_RET_OK)
+    {
+        return RF_RET_NO_INIT;
+    }
+    
+    gpio_set_ce(LOW);
+
+    uint8_t config_reg = read_reg(REG_CONFIG, sizeof(uint8_t));
+    if (FLAG_IS_SET(config_reg, PRIM_RX))
+    {
+        FLAG_CLEAR(config_reg, PRIM_RX);
+        write_reg(REG_CONFIG, config_reg, sizeof(config_reg));
+    }   
+
+    uint8_t rx_pipe_reg = read_reg(REG_EN_RXADDR, sizeof(uint8_t));
+    if (FLAG_IS_SET(rx_pipe_reg, ERX_P0) == false)
+    {
+        FLAG_SET(rx_pipe_reg, ERX_P0);
+        write_reg(REG_EN_RXADDR, rx_pipe_reg, sizeof(rx_pipe_reg));
+    }    
+
+    write_reg(REG_TX_ADDR, tx_addr, sizeof(tx_addr));
+    write_reg(REG_RX_ADDR_P0, tx_addr, sizeof(tx_addr));
+    tx_pl(data, size);
+
+    switch_chip_mode(MODE_RX_TX);
+    
+    while (chip_mode == MODE_RX_TX) {}
+    
+    rf_irq_handler();
+
+    const bool success = chip_mode == MODE_TX_DS;
+    switch_chip_mode(MODE_STANDBY_I);
+
+    if (!success) return RF_RET_FAIL;
+    return RF_RET_OK;
+}
+
+void rf_irq(void)
+{
+    chip_mode = MODE_IRQ;
+}
+
+void rf_irq_handler(void)
+{
+    uint8_t status_reg = nop();
+    if (FLAG_SET(status_reg, RX_DR_IF))
+    {
+        FLAG_CLEAR(status_reg, RX_DR_IF);
+        switch_chip_mode(MODE_RX_DR);
+    }
+    if (FLAG_SET(status_reg, TX_DS_IF))
+    {
+        FLAG_CLEAR(status_reg, TX_DS_IF);
+        switch_chip_mode(MODE_TX_DS);
+    }
+    if (FLAG_SET(status_reg, MAX_RT_IF))
+    {
+        FLAG_CLEAR(status_reg, MAX_RT_IF);
+        switch_chip_mode(MODE_STANDBY_I);
+    }
+    write_reg(REG_STATUS, status_reg, sizeof(status_reg));
 }
 
 /**
@@ -312,4 +541,14 @@ void tx_op(const Operation_e op, const uint8_t reg_addr)
     const uint8_t operation = (uint8_t)op;
     const uint8_t spi_tx_op = operation | reg_addr;
     spi_tx(&spi_tx_op, sizeof(spi_tx_op), false);
+}
+
+uint32_t parse_buff(const uint8_t* buff, const uint8_t size)
+{
+    uint32_t ret = 0;
+    for (int byte_n = 0; byte_n < size; ++byte_n)
+    {
+        ret |= ((uint32_t)buff[0] << (byte_n * 8));
+    }
+    return ret;
 }
