@@ -110,8 +110,8 @@
 
 typedef enum
 {
-    OP_READ_REG = 0b0000000,
-    OP_WRITE_REG = 0b0010000,
+    OP_READ_REG = 0b00000000,
+    OP_WRITE_REG = 0b00100000,
     OP_RX_PL = 0b01100001,
     OP_TX_PL = 0b10100000,
     OP_FLUSH_RX = 0b11100010,
@@ -156,13 +156,13 @@ static uint32_t read_reg(const uint8_t reg_addr, const uint8_t reg_size);
 static void write_reg(const uint8_t reg_addr, const uint32_t reg_data, const uint8_t reg_size);
 static void rx_pl(uint8_t* buff, const uint8_t size);
 static void tx_pl(const uint8_t* data, const uint8_t size);
-static void flush_rx() {};
-static void flush_tx() {};
-static void reuse_tx_pl() {};
-static uint8_t rx_pl_width() { return 0; };
-static void rx_ack_tx_pl() {};
-static void tx_pl_no_ack() {};
-static uint8_t nop();
+static void flush_rx(void);
+static void flush_tx(void);
+static void reuse_tx_pl(void);
+static uint8_t rx_pl_width(void);
+static void rx_ack_tx_pl(void);
+static void tx_pl_no_ack(void);
+static uint8_t nop(void);
 
 static void tx_op(const Operation_e op, const uint8_t reg_addr);
 
@@ -188,7 +188,7 @@ RF_Return_e nRF24L01_init(const nRF24L01_Init_t *config)
     }
     if (config->arc <= 0xF)
     {
-        retr_reg |= (config->arc << ARC_LSB); // retry 3 times
+        retr_reg |= (config->arc << ARC_LSB);
     }
 
     uint8_t rf_freq_reg = 0;
@@ -222,8 +222,8 @@ RF_Return_e nRF24L01_init(const nRF24L01_Init_t *config)
     write_reg(REG_SETUP_AW, addr_width_reg, sizeof(addr_width_reg));
     write_reg(REG_SETUP_RETR, retr_reg, sizeof(retr_reg));
     write_reg(REG_RF_CH, rf_freq_reg, sizeof(rf_freq_reg));
-    write_reg(REG_RF_SETUP, rf_config_reg, sizeof(rf_config_reg));    
-
+    write_reg(REG_RF_SETUP, rf_config_reg, sizeof(rf_config_reg));
+    
     switch_chip_mode(MODE_POWER_DOWN);
     return RF_RET_OK;
 }
@@ -520,22 +520,12 @@ void rf_irq_handler(void)
     write_reg(REG_STATUS, status_reg, sizeof(status_reg));
 }
 
-bool nRF_test(void)
-{
-    uint8_t status_reg = nop();
-    if (status_reg == 0b00001110)
-    {
-        return true;
-    }
-    return false;
-}
-
 /**
  * @brief  No operation. NOP = send 0xFF
  *          and receive status register in parallel
  * @retval Status register
  */
-uint8_t nop()
+uint8_t nop(void)
 {
     uint8_t status_reg;
     spi_rx(&status_reg, sizeof(status_reg), true);
@@ -592,3 +582,61 @@ uint32_t parse_buff(const uint8_t* buff, const uint8_t size)
     }
     return ret;
 }
+
+void flush_rx(void)
+{
+    if (chip_mode_is(MODE_POWER_DOWN) || chip_mode_is(MODE_STANDBY_I))
+    {
+        tx_op(OP_FLUSH_RX, 0);
+    }
+}
+
+void flush_tx(void)
+{
+    if (chip_mode_is(MODE_POWER_DOWN) || chip_mode_is(MODE_STANDBY_I))
+    {
+        tx_op(OP_FLUSH_TX, 0);
+    }
+}
+
+void reuse_tx_pl(void)
+{
+    tx_op(OP_REUSE_TX_PL, 0);
+}
+
+uint8_t rx_pl_width(void)
+{
+    uint8_t ret = 0;
+    tx_op(OP_RX_PL_WIDTH, 0);
+    spi_rx(&ret, sizeof(ret), true);
+    return ret;
+}
+
+void rx_ack_tx_pl(void)
+{
+
+}
+
+void tx_pl_no_ack(void)
+{
+
+}
+// TEST SECTION
+/* void nRF_test_check_config(void)
+{
+    read_reg(REG_SETUP_AW, 1);
+    read_reg(REG_SETUP_RETR, 1);
+    read_reg(REG_RF_CH, 1);
+    read_reg(REG_RF_SETUP, 1);
+}
+
+void nRF_test_status_reg(void)
+{
+    uint8_t status_reg = nop();
+}
+
+void nRF_test_rx_config(void)
+{
+    write_reg(REG_RX_ADDR_P0 + 1, 2147483611UL, 4);
+    read_reg(REG_RX_ADDR_P1, 4);
+} */
