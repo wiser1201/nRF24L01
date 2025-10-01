@@ -67,16 +67,15 @@
 #define RX_DR_IF 6
 #define TX_DS_IF 5
 #define MAX_RT_IF 4
-#define RX_P_NO_3 3
-#define RX_P_NO_2 2
-#define RX_P_NO_1 1
+#define RX_P_NO_MSB 3
+#define RX_P_NO_LSB 1
 #define TX_FULL 0
 
-#define TX_REUSE 6
-#define TX_FULL 5
-#define TX_EMPTY 4
-#define RX_FULL 1
-#define RX_EMPTY 0
+#define FIFO_TX_REUSE 6
+#define FIFO_TX_FULL 5
+#define FIFO_TX_EMPTY 4
+#define FIFO_RX_FULL 1
+#define FIFO_RX_EMPTY 0
 
 #define DPL_P5 5
 #define DPL_P4 4
@@ -94,7 +93,7 @@
 
 #define RF_FREQ_MIN 1
 #define RF_FREQ_MAX 124
-#define RF_FREQ_DEFAULT 2
+#define RF_FREQ_DEF 2
 
 #define ARD_STEP 250
 #define ARD_MIN ARD_STEP
@@ -157,20 +156,22 @@ static uint32_t read_reg(const uint8_t reg_addr, const uint8_t reg_size);
 static void write_reg(const uint8_t reg_addr, const uint32_t reg_data, const uint8_t reg_size);
 static void rx_pl(uint8_t* buff, const uint8_t size);
 static void tx_pl(const uint8_t* data, const uint8_t size);
-static void flush_rx();
-static void flush_tx();
-static void reuse_tx_pl();
-static uint8_t rx_pl_width();
-static void rx_ack_tx_pl();
-static void tx_pl_no_ack();
+static void flush_rx() {};
+static void flush_tx() {};
+static void reuse_tx_pl() {};
+static uint8_t rx_pl_width() { return 0; };
+static void rx_ack_tx_pl() {};
+static void tx_pl_no_ack() {};
 static uint8_t nop();
 
 static void tx_op(const Operation_e op, const uint8_t reg_addr);
 
 static RF_Return_e switch_chip_mode(const ChipMode_e mode);
-static void to_standby(void);
-static void to_powerdown(void);
-static void to_active(void);
+static bool chip_mode_is(const ChipMode_e mode);
+static void pwrd_to_standby(void);
+static void standby_to_pwrd(void);
+static void standby_to_active(void);
+static void active_to_standby(void);
 static void rf_irq_handler(void);
 static uint32_t parse_buff(const uint8_t* buff, const uint8_t size);
 
@@ -197,7 +198,7 @@ RF_Return_e nRF24L01_init(const nRF24L01_Init_t *config)
     }
     else
     {
-        rf_freq_reg = RF_FREQ_DEFAULT;
+        rf_freq_reg = RF_FREQ_DEF;
     }
 
     uint8_t rf_config_reg = 0;
@@ -240,6 +241,7 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
             chip_mode = mode;
             break;
         }
+        default: break;
         }
         break;
     }
@@ -249,11 +251,11 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
         {
         case MODE_STANDBY_I:
         {
-            gpio_set_ce(LOW);
-            to_standby();
+            pwrd_to_standby();
             chip_mode = mode;
             break;
         }
+        default: break;
         }
         break;
     }
@@ -263,16 +265,17 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
         {
         case MODE_POWER_DOWN:
         {
-            to_powerdown();
+            standby_to_pwrd();
             chip_mode = mode;
             break;
         }
         case MODE_RX_TX:
         {
-            to_active();
+            standby_to_active();
             chip_mode = mode;
             break;
         }
+        default: break;
         }
         break;
     }
@@ -282,7 +285,7 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
         {
         case MODE_STANDBY_I:
         {
-            gpio_set_ce(LOW);
+            active_to_standby();
             chip_mode = mode;
             break;
         }
@@ -291,6 +294,7 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
             chip_mode = mode;
             break;
         }
+        default: break;
         }
         break;
     }
@@ -300,7 +304,7 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
         {
         case MODE_STANDBY_I:
         {
-            gpio_set_ce(LOW);
+            active_to_standby();
             chip_mode = mode;
             break;
         }
@@ -310,6 +314,7 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
             chip_mode = mode;
             break;
         }
+        default: break;
         }
         break;
     }
@@ -320,13 +325,15 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
         {
         case MODE_STANDBY_I:
         {
-            gpio_set_ce(LOW);
+            active_to_standby();
             chip_mode = mode;
             break;
         }
+        default: break;
         }
         break;
     }
+    default: break;
     }
     if (chip_mode != mode)
     {
@@ -335,24 +342,35 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
     return RF_RET_OK;
 }
 
-void to_standby(void)
+void pwrd_to_standby(void)
 {
+    gpio_set_ce(LOW);
     uint8_t config_reg = read_reg(REG_CONFIG, sizeof(uint8_t));
     FLAG_SET(config_reg, PWR_UP);
     write_reg(REG_CONFIG, config_reg, sizeof(config_reg));
     ex_delay_us(US_IN_MS * 10);
 }
 
-void to_powerdown(void)
+void standby_to_pwrd(void)
 {
     uint8_t config_reg = read_reg(REG_CONFIG, sizeof(uint8_t));
     FLAG_CLEAR(config_reg, PWR_UP);
     write_reg(REG_CONFIG, config_reg, sizeof(config_reg));
 }
 
-void to_active(void)
+void standby_to_active(void)
 {
     gpio_set_ce(HIGH);
+}
+
+void active_to_standby(void)
+{
+    gpio_set_ce(LOW);
+}
+
+bool chip_mode_is(const ChipMode_e mode)
+{
+    return chip_mode == mode;
 }
 
 RF_Return_e nRF24L01_tx(const TxConfig_t* tx)
@@ -382,11 +400,11 @@ RF_Return_e nRF24L01_tx(const TxConfig_t* tx)
 
     switch_chip_mode(MODE_RX_TX);
     
-    while (chip_mode == MODE_RX_TX) {}
+    while (chip_mode_is(MODE_RX_TX)) {}
     
     rf_irq_handler();
 
-    const bool success = chip_mode == MODE_TX_DS;
+    const bool success = chip_mode_is(MODE_TX_DS);
     switch_chip_mode(MODE_STANDBY_I);
 
     if (!success) return RF_RET_FAIL;
@@ -413,13 +431,10 @@ RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
         return RF_RET_NO_INIT;
     }
     
-    uint8_t rx_pipe_reg = 0;
-    FLAG_SET(rx_pipe_reg, ERX_P0 + reg_shift);
-
-    uint8_t rx_pipe_reg_old = read_reg(REG_EN_RXADDR, sizeof(rx_pipe_reg));
-    if ((rx_pipe_reg_old & rx_pipe_reg) == 0)
+    uint8_t rx_pipe_reg = read_reg(REG_EN_RXADDR, sizeof(rx_pipe_reg));
+    if (FLAG_IS_SET(rx_pipe_reg, ERX_P0 + reg_shift) == false)
     {
-        rx_pipe_reg |= rx_pipe_reg_old;
+        FLAG_SET(rx_pipe_reg, ERX_P0 + reg_shift);
         write_reg(REG_EN_RXADDR, rx_pipe_reg, sizeof(rx_pipe_reg));
     }
 
@@ -427,11 +442,18 @@ RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
 
     if (rx->rx_dpl)
     {
-        uint8_t rx_dpl_reg = 0, feat_reg = 0;
-        FLAG_SET(rx_dpl_reg, DPL_P0 + reg_shift);
-        feat_reg = (1 << EN_DPL);
-        write_reg(REG_FEATURE, feat_reg, sizeof(feat_reg));
-        write_reg(REG_DYNPD, rx_dpl_reg, sizeof(rx_dpl_reg));
+        uint8_t rx_dpl_reg = read_reg(REG_DYNPD, sizeof(rx_pipe_reg));
+        uint8_t feat_reg = read_reg(REG_FEATURE, sizeof(rx_pipe_reg));
+        if (FLAG_IS_SET(feat_reg, EN_DPL) == false)
+        {
+            FLAG_SET(feat_reg, EN_DPL);
+            write_reg(REG_FEATURE, feat_reg, sizeof(feat_reg));
+        }
+        if (FLAG_IS_SET(rx_dpl_reg, DPL_P0 + reg_shift) == false)
+        {
+            FLAG_SET(rx_dpl_reg, DPL_P0 + reg_shift);
+            write_reg(REG_DYNPD, rx_dpl_reg, sizeof(rx_dpl_reg));
+        }
     }
     else
     {
@@ -441,18 +463,18 @@ RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
     switch_chip_mode(MODE_RX_TX);
     
     const uint32_t time_ms = ex_get_ms();
-    while (chip_mode == MODE_RX_TX)
+    while (chip_mode_is(MODE_RX_TX))
     {
         if ((ex_get_ms() - time_ms) > rx->ms)
         {
             switch_chip_mode(MODE_STANDBY_I);
-            RF_RET_FAIL;
+            return RF_RET_FAIL;
         }
     }
 
     rf_irq_handler();
     
-    const bool success = chip_mode == MODE_RX_DR;
+    const bool success = chip_mode_is(MODE_RX_DR);
     switch_chip_mode(MODE_STANDBY_I);
 
     if (!success)
@@ -461,7 +483,7 @@ RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
     }
 
     uint8_t status_reg = nop();
-    uint8_t data_in_pipe = (status_reg & 0b00001110);    
+    uint8_t data_in_pipe = ((status_reg >> RX_P_NO_LSB) & 0b00000111);    
 
     if (data_in_pipe != (uint8_t)rx->rx_pipe)
     {
@@ -482,20 +504,30 @@ void rf_irq_handler(void)
     uint8_t status_reg = nop();
     if (FLAG_SET(status_reg, RX_DR_IF))
     {
-        FLAG_CLEAR(status_reg, RX_DR_IF);
         switch_chip_mode(MODE_RX_DR);
+        FLAG_CLEAR(status_reg, RX_DR_IF);        
     }
     if (FLAG_SET(status_reg, TX_DS_IF))
     {
-        FLAG_CLEAR(status_reg, TX_DS_IF);
         switch_chip_mode(MODE_TX_DS);
+        FLAG_CLEAR(status_reg, TX_DS_IF);        
     }
     if (FLAG_SET(status_reg, MAX_RT_IF))
     {
-        FLAG_CLEAR(status_reg, MAX_RT_IF);
         switch_chip_mode(MODE_STANDBY_I);
+        FLAG_CLEAR(status_reg, MAX_RT_IF);        
     }
     write_reg(REG_STATUS, status_reg, sizeof(status_reg));
+}
+
+bool nRF_test(void)
+{
+    uint8_t status_reg = nop();
+    if (status_reg == 0b00001110)
+    {
+        return true;
+    }
+    return false;
 }
 
 /**
@@ -522,7 +554,7 @@ uint32_t read_reg(const uint8_t reg_addr, const uint8_t reg_size)
 
 void write_reg(const uint8_t reg_addr, const uint32_t reg_data, const uint8_t reg_size)
 {
-    if (reg_addr == 0 || reg_size == 0) return 0;
+    if (reg_addr == 0 || reg_size == 0) return;
 
     tx_op(OP_WRITE_REG, reg_addr);
     spi_tx((uint8_t*)&reg_data, reg_size, true);
@@ -530,7 +562,7 @@ void write_reg(const uint8_t reg_addr, const uint32_t reg_data, const uint8_t re
 
 void rx_pl(uint8_t *buff, const uint8_t size)
 {
-    if (!buff || size == 0) return 0;
+    if (!buff || size == 0) return;
 
     tx_op(OP_RX_PL, 0);
     spi_rx(buff, size, true);
@@ -538,7 +570,7 @@ void rx_pl(uint8_t *buff, const uint8_t size)
 
 void tx_pl(const uint8_t *data, const uint8_t size)
 {
-    if (!data || size == 0) return 0;
+    if (!data || size == 0) return;
 
     tx_op(OP_TX_PL, 0);
     spi_tx(data, size, true);
@@ -554,9 +586,9 @@ void tx_op(const Operation_e op, const uint8_t reg_addr)
 uint32_t parse_buff(const uint8_t* buff, const uint8_t size)
 {
     uint32_t ret = 0;
-    for (int byte_n = 0; byte_n < size; ++byte_n)
+    for (int i = 0; i < size; ++i)
     {
-        ret |= ((uint32_t)buff[0] << (byte_n * 8));
+        ret |= ((uint32_t)buff[i] << (i * 8));
     }
     return ret;
 }

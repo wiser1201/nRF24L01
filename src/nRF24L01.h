@@ -17,13 +17,6 @@ typedef enum
 
 typedef enum
 {
-    AW_3 = 0x1,
-    AW_4 = 0x2,
-    AW_5 = 0x3
-} AddressWidth_e;
-
-typedef enum
-{
     DR_1MBPS,
     DR_2MBPS,
     DR_250KBPS
@@ -65,9 +58,6 @@ typedef struct
 
 typedef struct
 {
-    /* bool enable_rx_dr_irq;
-    bool enable_tx_ds_irq;
-    bool enable_max_rt_irq; */
     TxPower_e tx_pwr;
     uint8_t arc;                    // auto-retransmit count, 0 disabled, 15 max
     ARD_e ard;                      // auto-retransmit delay
@@ -85,5 +75,6 @@ typedef enum
 RF_Return_e nRF24L01_init(const nRF24L01_Init_t* config);
 RF_Return_e nRF24L01_tx(const TxConfig_t* tx);
 RF_Return_e nRF24L01_rx(const RxConfig_t* rx);
+bool nRF_test(void);
 
 #endif // NRF24L01_H
