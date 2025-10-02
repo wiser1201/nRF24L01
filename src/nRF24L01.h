@@ -77,8 +77,9 @@ RF_Return_e nRF24L01_tx(const TxConfig_t* tx);
 RF_Return_e nRF24L01_rx(const RxConfig_t* rx);
 
 // TEST SECTION
-/* void nRF_test_check_config(void);
+// void nRF_test_check_config(void);
 void nRF_test_status_reg(void);
-void nRF_test_rx_config(void); */
+// void nRF_test_rx_config(void);
+uint8_t nRF_read_fifo_status(void);
 
 #endif // NRF24L01_H

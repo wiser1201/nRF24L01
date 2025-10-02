@@ -130,13 +130,21 @@ typedef enum
     MODE_POWER_DOWN,
     MODE_STANDBY_I,
     MODE_STANDBY_II,
-    MODE_RX_TX,
-    MODE_RX_DR,
-    MODE_TX_DS,
+    MODE_RX,
+    MODE_TX,
     MODE_IRQ
 } ChipMode_e;
 
+typedef enum
+{
+    IRQ_NONE,
+    IRQ_RX_DR,
+    IRQ_TX_DS,
+    IRQ_MAX_RT
+} IRQ_State_e;
+
 static volatile ChipMode_e chip_mode;
+static volatile IRQ_State_e irq_state;
 
 /**
  * @brief  Reports the name of the source file and the source line number
@@ -168,10 +176,11 @@ static void tx_op(const Operation_e op, const uint8_t reg_addr);
 
 static RF_Return_e switch_chip_mode(const ChipMode_e mode);
 static bool chip_mode_is(const ChipMode_e mode);
+static bool irq_state_is(const IRQ_State_e state);
+static void irq_state_set(const IRQ_State_e state);
+static void irq_state_clear(void);
 static void pwrd_to_standby(void);
 static void standby_to_pwrd(void);
-static void standby_to_active(void);
-static void active_to_standby(void);
 static void rf_irq_handler(void);
 static uint32_t parse_buff(const uint8_t* buff, const uint8_t size);
 
@@ -269,9 +278,18 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
             chip_mode = mode;
             break;
         }
-        case MODE_RX_TX:
+        case MODE_RX:
         {
-            standby_to_active();
+            gpio_set_ce(true);
+            ex_delay_us(130);
+            chip_mode = mode;
+            break;
+        }
+        case MODE_TX:
+        {
+            gpio_set_ce(true);
+            ex_delay_us(130);
+            gpio_set_ce(false);
             chip_mode = mode;
             break;
         }
@@ -279,13 +297,14 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
         }
         break;
     }
-    case MODE_RX_TX:
+    case MODE_RX:
+    case MODE_TX:
     {
         switch (mode)
         {
         case MODE_STANDBY_I:
         {
-            active_to_standby();
+            gpio_set_ce(false);
             chip_mode = mode;
             break;
         }
@@ -304,28 +323,7 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
         {
         case MODE_STANDBY_I:
         {
-            active_to_standby();
-            chip_mode = mode;
-            break;
-        }
-        case MODE_TX_DS:
-        case MODE_RX_DR:
-        {
-            chip_mode = mode;
-            break;
-        }
-        default: break;
-        }
-        break;
-    }
-    case MODE_TX_DS:
-    case MODE_RX_DR:
-    {
-        switch (mode)
-        {
-        case MODE_STANDBY_I:
-        {
-            active_to_standby();
+            gpio_set_ce(false);
             chip_mode = mode;
             break;
         }
@@ -345,7 +343,7 @@ RF_Return_e switch_chip_mode(const ChipMode_e mode)
 void pwrd_to_standby(void)
 {
     gpio_set_ce(LOW);
-    uint8_t config_reg = read_reg(REG_CONFIG, sizeof(uint8_t));
+    uint8_t config_reg = read_reg(REG_CONFIG, sizeof(config_reg));
     FLAG_SET(config_reg, PWR_UP);
     write_reg(REG_CONFIG, config_reg, sizeof(config_reg));
     ex_delay_us(US_IN_MS * 10);
@@ -358,36 +356,45 @@ void standby_to_pwrd(void)
     write_reg(REG_CONFIG, config_reg, sizeof(config_reg));
 }
 
-void standby_to_active(void)
-{
-    gpio_set_ce(HIGH);
-}
-
-void active_to_standby(void)
-{
-    gpio_set_ce(LOW);
-}
-
 bool chip_mode_is(const ChipMode_e mode)
 {
     return chip_mode == mode;
 }
 
+bool irq_state_is(const IRQ_State_e state)
+{
+    return irq_state == state;
+}
+
+void irq_state_set(const IRQ_State_e state)
+{
+    irq_state = state;
+}
+
+void irq_state_clear(void)
+{
+    irq_state = IRQ_NONE;
+}
+
 RF_Return_e nRF24L01_tx(const TxConfig_t* tx)
 {
+    if (!tx || !tx->data || tx->size <= 0 || tx->size > 32)
+    {
+        return RF_RET_NO_INIT;
+    }
     if (switch_chip_mode(MODE_STANDBY_I) != RF_RET_OK)
     {
         return RF_RET_NO_INIT;
     }
 
-    uint8_t config_reg = read_reg(REG_CONFIG, sizeof(uint8_t));
+    uint8_t config_reg = read_reg(REG_CONFIG, sizeof(config_reg));
     if (FLAG_IS_SET(config_reg, PRIM_RX))
     {
         FLAG_CLEAR(config_reg, PRIM_RX);
         write_reg(REG_CONFIG, config_reg, sizeof(config_reg));
     }
 
-    uint8_t rx_pipe_reg = read_reg(REG_EN_RXADDR, sizeof(uint8_t));
+    uint8_t rx_pipe_reg = read_reg(REG_EN_RXADDR, sizeof(rx_pipe_reg));
     if (FLAG_IS_SET(rx_pipe_reg, ERX_P0) == false)
     {
         FLAG_SET(rx_pipe_reg, ERX_P0);
@@ -398,14 +405,16 @@ RF_Return_e nRF24L01_tx(const TxConfig_t* tx)
     write_reg(REG_RX_ADDR_P0, tx->tx_addr, sizeof(tx->tx_addr));
     tx_pl(tx->data, tx->size);
 
-    switch_chip_mode(MODE_RX_TX);
+    switch_chip_mode(MODE_TX);
     
-    while (chip_mode_is(MODE_RX_TX)) {}
+    while (chip_mode_is(MODE_TX)) {}
     
     rf_irq_handler();
 
-    const bool success = chip_mode_is(MODE_TX_DS);
+    const bool success = irq_state_is(IRQ_TX_DS);
     switch_chip_mode(MODE_STANDBY_I);
+    irq_state_clear();
+    flush_tx();
 
     if (!success) return RF_RET_FAIL;
     return RF_RET_OK;
@@ -413,12 +422,16 @@ RF_Return_e nRF24L01_tx(const TxConfig_t* tx)
 
 RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
 {
+    if (!rx || !rx->buff || rx->size <= 0 || rx->size > 32 || rx->ms <= 0)
+    {
+        return RF_RET_NO_INIT;
+    }
     if (switch_chip_mode(MODE_STANDBY_I) != RF_RET_OK)
     {
         return RF_RET_NO_INIT;
     }
 
-    uint8_t config_reg = read_reg(REG_CONFIG, sizeof(uint8_t));
+    uint8_t config_reg = read_reg(REG_CONFIG, sizeof(config_reg));
     if (FLAG_IS_SET(config_reg, PRIM_RX) == false)
     {
         FLAG_SET(config_reg, PRIM_RX);
@@ -442,8 +455,8 @@ RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
 
     if (rx->rx_dpl)
     {
-        uint8_t rx_dpl_reg = read_reg(REG_DYNPD, sizeof(rx_pipe_reg));
-        uint8_t feat_reg = read_reg(REG_FEATURE, sizeof(rx_pipe_reg));
+        uint8_t rx_dpl_reg = read_reg(REG_DYNPD, sizeof(rx_dpl_reg));
+        uint8_t feat_reg = read_reg(REG_FEATURE, sizeof(feat_reg));
         if (FLAG_IS_SET(feat_reg, EN_DPL) == false)
         {
             FLAG_SET(feat_reg, EN_DPL);
@@ -460,10 +473,10 @@ RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
         write_reg(REG_RX_PW_P0 + reg_shift, rx->size, sizeof(rx->size));
     }
 
-    switch_chip_mode(MODE_RX_TX);
+    switch_chip_mode(MODE_RX);
     
     const uint32_t time_ms = ex_get_ms();
-    while (chip_mode_is(MODE_RX_TX))
+    while (chip_mode_is(MODE_RX))
     {
         if ((ex_get_ms() - time_ms) > rx->ms)
         {
@@ -474,8 +487,9 @@ RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
 
     rf_irq_handler();
     
-    const bool success = chip_mode_is(MODE_RX_DR);
+    const bool success = irq_state_is(IRQ_RX_DR);
     switch_chip_mode(MODE_STANDBY_I);
+    irq_state_clear();
 
     if (!success)
     {
@@ -483,7 +497,7 @@ RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
     }
 
     uint8_t status_reg = nop();
-    uint8_t data_in_pipe = ((status_reg >> RX_P_NO_LSB) & 0b00000111);    
+    uint8_t data_in_pipe = ((status_reg >> RX_P_NO_LSB) & 0b111);    
 
     if (data_in_pipe != (uint8_t)rx->rx_pipe)
     {
@@ -502,22 +516,23 @@ void rf_irq(void)
 void rf_irq_handler(void)
 {
     uint8_t status_reg = nop();
-    if (FLAG_SET(status_reg, RX_DR_IF))
+    uint8_t status_clear = 0;
+    if (FLAG_IS_SET(status_reg, RX_DR_IF))
     {
-        switch_chip_mode(MODE_RX_DR);
-        FLAG_CLEAR(status_reg, RX_DR_IF);        
+        irq_state_set(IRQ_RX_DR);
+        status_clear |= (1 << RX_DR_IF);
     }
-    if (FLAG_SET(status_reg, TX_DS_IF))
+    if (FLAG_IS_SET(status_reg, TX_DS_IF))
     {
-        switch_chip_mode(MODE_TX_DS);
-        FLAG_CLEAR(status_reg, TX_DS_IF);        
+        irq_state_set(IRQ_TX_DS);
+        status_clear |= (1 << TX_DS_IF);     
     }
-    if (FLAG_SET(status_reg, MAX_RT_IF))
+    if (FLAG_IS_SET(status_reg, MAX_RT_IF))
     {
-        switch_chip_mode(MODE_STANDBY_I);
-        FLAG_CLEAR(status_reg, MAX_RT_IF);        
+        irq_state_set(IRQ_MAX_RT);
+        status_clear |= (1 << MAX_RT_IF);
     }
-    write_reg(REG_STATUS, status_reg, sizeof(status_reg));
+    write_reg(REG_STATUS, status_clear, sizeof(status_reg));
 }
 
 /**
@@ -534,7 +549,7 @@ uint8_t nop(void)
 
 uint32_t read_reg(const uint8_t reg_addr, const uint8_t reg_size)
 {
-    if (reg_addr == 0 || reg_size == 0) return 0;
+    if (reg_size == 0) return 0;
 
     uint8_t buff[reg_size];
     tx_op(OP_READ_REG, reg_addr);
@@ -544,7 +559,7 @@ uint32_t read_reg(const uint8_t reg_addr, const uint8_t reg_size)
 
 void write_reg(const uint8_t reg_addr, const uint32_t reg_data, const uint8_t reg_size)
 {
-    if (reg_addr == 0 || reg_size == 0) return;
+    if (reg_size == 0) return;
 
     tx_op(OP_WRITE_REG, reg_addr);
     spi_tx((uint8_t*)&reg_data, reg_size, true);
@@ -622,21 +637,25 @@ void tx_pl_no_ack(void)
 
 }
 // TEST SECTION
-/* void nRF_test_check_config(void)
-{
-    read_reg(REG_SETUP_AW, 1);
-    read_reg(REG_SETUP_RETR, 1);
-    read_reg(REG_RF_CH, 1);
-    read_reg(REG_RF_SETUP, 1);
-}
+// void nRF_test_check_config(void)
+// {
+//     read_reg(REG_SETUP_AW, 1);
+//     read_reg(REG_SETUP_RETR, 1);
+//     read_reg(REG_RF_CH, 1);
+//     read_reg(REG_RF_SETUP, 1);
+// }
 
 void nRF_test_status_reg(void)
 {
     uint8_t status_reg = nop();
 }
 
-void nRF_test_rx_config(void)
+// void nRF_test_rx_config(void)
+// {
+//     write_reg(REG_RX_ADDR_P0 + 1, 2147483611UL, 4);
+//     read_reg(REG_RX_ADDR_P1, 4);
+// }
+uint8_t nRF_read_fifo_status(void)
 {
-    write_reg(REG_RX_ADDR_P0 + 1, 2147483611UL, 4);
-    read_reg(REG_RX_ADDR_P1, 4);
-} */
+    return read_reg(REG_FIFO_STATUS, 1);
+}
