@@ -135,16 +135,7 @@ typedef enum
     MODE_IRQ
 } ChipMode_e;
 
-typedef enum
-{
-    IRQ_NONE,
-    IRQ_RX_DR,
-    IRQ_TX_DS,
-    IRQ_MAX_RT
-} IRQ_State_e;
-
 static volatile ChipMode_e chip_mode;
-static volatile IRQ_State_e irq_state;
 
 /**
  * @brief  Reports the name of the source file and the source line number
@@ -176,12 +167,9 @@ static void tx_op(const Operation_e op, const uint8_t reg_addr);
 
 static RF_Return_e switch_chip_mode(const ChipMode_e mode);
 static bool chip_mode_is(const ChipMode_e mode);
-static bool irq_state_is(const IRQ_State_e state);
-static void irq_state_set(const IRQ_State_e state);
-static void irq_state_clear(void);
 static void pwrd_to_standby(void);
 static void standby_to_pwrd(void);
-static void rf_irq_handler(void);
+static uint8_t rf_irq_handler(void);
 static uint32_t parse_buff(const uint8_t* buff, const uint8_t size);
 
 
@@ -361,21 +349,6 @@ bool chip_mode_is(const ChipMode_e mode)
     return chip_mode == mode;
 }
 
-bool irq_state_is(const IRQ_State_e state)
-{
-    return irq_state == state;
-}
-
-void irq_state_set(const IRQ_State_e state)
-{
-    irq_state = state;
-}
-
-void irq_state_clear(void)
-{
-    irq_state = IRQ_NONE;
-}
-
 RF_Return_e nRF24L01_tx(const TxConfig_t* tx)
 {
     if (!tx || !tx->data || tx->size <= 0 || tx->size > 32)
@@ -409,15 +382,16 @@ RF_Return_e nRF24L01_tx(const TxConfig_t* tx)
     
     while (chip_mode_is(MODE_TX)) {}
     
-    rf_irq_handler();
+    const uint8_t irq_flags = rf_irq_handler();
 
-    const bool success = irq_state_is(IRQ_TX_DS);
     switch_chip_mode(MODE_STANDBY_I);
-    irq_state_clear();
     flush_tx();
 
-    if (!success) return RF_RET_FAIL;
-    return RF_RET_OK;
+    if (FLAG_IS_SET(irq_flags, TX_DS_IF))
+    {
+        return RF_RET_OK;
+    }
+    return RF_RET_FAIL;
 }
 
 RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
@@ -485,13 +459,11 @@ RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
         }
     }
 
-    rf_irq_handler();
+    const uint8_t irq_flags = rf_irq_handler();
     
-    const bool success = irq_state_is(IRQ_RX_DR);
     switch_chip_mode(MODE_STANDBY_I);
-    irq_state_clear();
 
-    if (!success)
+    if (FLAG_IS_SET(irq_flags, RX_DR_IF) == false)
     {
         return RF_RET_FAIL;
     }
@@ -513,26 +485,24 @@ void rf_irq(void)
     chip_mode = MODE_IRQ;
 }
 
-void rf_irq_handler(void)
+uint8_t rf_irq_handler(void)
 {
-    uint8_t status_reg = nop();
-    uint8_t status_clear = 0;
+    const uint8_t status_reg = nop();
+    uint8_t irq_flags = 0;
     if (FLAG_IS_SET(status_reg, RX_DR_IF))
     {
-        irq_state_set(IRQ_RX_DR);
-        status_clear |= (1 << RX_DR_IF);
+        FLAG_SET(irq_flags, RX_DR_IF);
     }
     if (FLAG_IS_SET(status_reg, TX_DS_IF))
     {
-        irq_state_set(IRQ_TX_DS);
-        status_clear |= (1 << TX_DS_IF);     
+        FLAG_SET(irq_flags, TX_DS_IF);   
     }
     if (FLAG_IS_SET(status_reg, MAX_RT_IF))
     {
-        irq_state_set(IRQ_MAX_RT);
-        status_clear |= (1 << MAX_RT_IF);
+        FLAG_SET(irq_flags, MAX_RT_IF);
     }
-    write_reg(REG_STATUS, status_clear, sizeof(status_reg));
+    write_reg(REG_STATUS, status_reg, sizeof(status_reg));
+    return irq_flags;
 }
 
 /**
