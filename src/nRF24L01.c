@@ -615,17 +615,17 @@ void tx_pl_no_ack(void)
 //     read_reg(REG_RF_SETUP, 1);
 // }
 
-void nRF_test_status_reg(void)
-{
-    nop();
-}
+// void nRF_test_status_reg(void)
+// {
+//     nop();
+// }
 
 // void nRF_test_rx_config(void)
 // {
 //     write_reg(REG_RX_ADDR_P0 + 1, 2147483611UL, 4);
 //     read_reg(REG_RX_ADDR_P1, 4);
 // }
-uint8_t nRF_read_fifo_status(void)
-{
-    return read_reg(REG_FIFO_STATUS, 1);
-}
+// uint8_t nRF_read_fifo_status(void)
+// {
+//     return read_reg(REG_FIFO_STATUS, 1);
+// }
