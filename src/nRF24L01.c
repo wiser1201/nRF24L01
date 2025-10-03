@@ -382,12 +382,13 @@ RF_Return_e nRF24L01_tx(const TxConfig_t* tx)
     
     while (chip_mode_is(MODE_TX)) {}
     
-    const uint8_t irq_flags = rf_irq_handler();
-
     switch_chip_mode(MODE_STANDBY_I);
+
+    const uint8_t status_reg = rf_irq_handler();
+    
     flush_tx();
 
-    if (FLAG_IS_SET(irq_flags, TX_DS_IF))
+    if (FLAG_IS_SET(status_reg, TX_DS_IF))
     {
         return RF_RET_OK;
     }
@@ -459,16 +460,15 @@ RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
         }
     }
 
-    const uint8_t irq_flags = rf_irq_handler();
-    
     switch_chip_mode(MODE_STANDBY_I);
 
-    if (FLAG_IS_SET(irq_flags, RX_DR_IF) == false)
+    const uint8_t status_reg = rf_irq_handler();
+    
+    if (FLAG_IS_SET(status_reg, RX_DR_IF) == false)
     {
         return RF_RET_FAIL;
     }
 
-    uint8_t status_reg = nop();
     uint8_t data_in_pipe = ((status_reg >> RX_P_NO_LSB) & 0b111);    
 
     if (data_in_pipe != (uint8_t)rx->rx_pipe)
@@ -502,7 +502,7 @@ uint8_t rf_irq_handler(void)
         FLAG_SET(irq_flags, MAX_RT_IF);
     }
     write_reg(REG_STATUS, status_reg, sizeof(status_reg));
-    return irq_flags;
+    return status_reg;
 }
 
 /**
@@ -617,7 +617,7 @@ void tx_pl_no_ack(void)
 
 void nRF_test_status_reg(void)
 {
-    uint8_t status_reg = nop();
+    nop();
 }
 
 // void nRF_test_rx_config(void)
