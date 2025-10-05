@@ -450,17 +450,11 @@ RF_Return_e nRF24L01_rx(const RxConfig_t* rx)
 
     switch_chip_mode(MODE_RX);
     
-    const uint32_t time_ms = ex_get_ms();
-    while (chip_mode_is(MODE_RX))
-    {
-        if ((ex_get_ms() - time_ms) > rx->ms)
-        {
-            switch_chip_mode(MODE_STANDBY_I);
-            return RF_RET_FAIL;
-        }
-    }
+    const uint32_t timeout = ex_get_ms() + rx->ms;
+    while (chip_mode_is(MODE_RX) && (ex_get_ms() < timeout)) {}
 
     switch_chip_mode(MODE_STANDBY_I);
+    ex_delay_us(1);
 
     const uint8_t status_reg = rf_irq_handler();
     
