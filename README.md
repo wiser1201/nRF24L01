@@ -1,7 +1,8 @@
 # nRF24L01 Driver
 
-Simple cross-platform driver for the LCD displays that use nRF24L01
-receiver-transmitter. MCU with SPI communication and one IRQ line is required.
+Simple cross-platform driver for the RF 2.4 GHz communication that use nRF24L01
+receiver-transmitter and Enhanced ShockBurst system.
+MCU with SPI communication and one IRQ line is required.
 
 # nRF24L01 Integration
 
