@@ -124,15 +124,8 @@ typedef enum
 
 } Operation_e;
 
-static bool irq_flag = false;
+static volatile bool irq_flag = false;
 
-/**
- * @brief  Reports the name of the source file and the source line number
- *         where the assert_param error has occurred.
- * @param  file: pointer to the source file name
- * @param  line: assert_param error line source number
- * @retval None
- */
 extern void spi_tx(const uint8_t* data, const unsigned int size, const bool cs);
 extern void spi_rx(uint8_t* buff, const unsigned int size, const bool cs);
 extern void ex_delay_us(const uint32_t us);
@@ -148,8 +141,6 @@ static void flush_rx(void);
 static void flush_tx(void);
 static void reuse_tx_pl(void);
 static uint8_t rx_pl_width(void);
-static void rx_ack_tx_pl(void);
-static void tx_pl_no_ack(void);
 static uint8_t nop(void);
 
 static void tx_op(const Operation_e op, const uint8_t reg_addr);
@@ -364,11 +355,6 @@ uint8_t rf_irq_handler(void)
     return status_reg;
 }
 
-/**
- * @brief  No operation. NOP = send 0xFF
- *          and receive status register in parallel
- * @retval Status register
- */
 uint8_t nop(void)
 {
     uint8_t status_reg;
@@ -455,36 +441,3 @@ uint8_t rx_pl_width(void)
     spi_rx(&ret, sizeof(ret), true);
     return ret;
 }
-
-void rx_ack_tx_pl(void)
-{
-
-}
-
-void tx_pl_no_ack(void)
-{
-
-}
-// TEST SECTION
-// void nRF_test_check_config(void)
-// {
-//     read_reg(REG_SETUP_AW, 1);
-//     read_reg(REG_SETUP_RETR, 1);
-//     read_reg(REG_RF_CH, 1);
-//     read_reg(REG_RF_SETUP, 1);
-// }
-
-// void nRF_test_status_reg(void)
-// {
-//     nop();
-// }
-
-// void nRF_test_rx_config(void)
-// {
-//     write_reg(REG_RX_ADDR_P0 + 1, 2147483611UL, 4);
-//     read_reg(REG_RX_ADDR_P1, 4);
-// }
-// uint8_t nRF_read_fifo_status(void)
-// {
-//     return read_reg(REG_FIFO_STATUS, 1);
-// }
